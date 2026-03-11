@@ -19,6 +19,18 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"/>
 
+    <Button
+        android:id="@+id/btnRetry"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="🔄 REINTENTAR"
+        android:backgroundTint="#FF9800"
+        android:textColor="#000000"
+        android:visibility="gone"
+        app:layout_constraintTop_toBottomOf="@id/tvStatus"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"/>
+
     <TextView
         android:id="@+id/tvCount"
         android:layout_width="wrap_content"
@@ -28,7 +40,7 @@
         android:textSize="24sp"
         android:textStyle="bold"
         android:padding="8dp"
-        app:layout_constraintTop_toBottomOf="@id/tvStatus"
+        app:layout_constraintTop_toBottomOf="@id/btnRetry"
         app:layout_constraintStart_toStartOf="parent"/>
 
     <Button
@@ -38,7 +50,8 @@
         android:text="ESCANEAR"
         android:backgroundTint="#00E5FF"
         android:textColor="#000000"
-        app:layout_constraintTop_toBottomOf="@id/tvStatus"
+        android:enabled="false"
+        app:layout_constraintTop_toBottomOf="@id/btnRetry"
         app:layout_constraintEnd_toStartOf="@id/btnClear"/>
 
     <Button
@@ -48,7 +61,7 @@
         android:text="LIMPIAR"
         android:backgroundTint="#FF5252"
         android:textColor="#FFFFFF"
-        app:layout_constraintTop_toBottomOf="@id/tvStatus"
+        app:layout_constraintTop_toBottomOf="@id/btnRetry"
         app:layout_constraintEnd_toStartOf="@id/btnExport"/>
 
     <Button
@@ -58,7 +71,7 @@
         android:text="CSV"
         android:backgroundTint="#69F0AE"
         android:textColor="#000000"
-        app:layout_constraintTop_toBottomOf="@id/tvStatus"
+        app:layout_constraintTop_toBottomOf="@id/btnRetry"
         app:layout_constraintEnd_toEndOf="parent"/>
 
     <androidx.recyclerview.widget.RecyclerView

@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.zebra.rfidscanner.databinding.ActivityScanBinding
@@ -64,11 +65,16 @@ class ScanActivity : AppCompatActivity() {
             binding.btnScan.text = "ESCANEAR"
         }
         binding.btnExport.setOnClickListener { exportCsv() }
+        binding.btnRetry.setOnClickListener { viewModel.retry() }
     }
 
     private fun observeState() {
         lifecycleScope.launch {
             viewModel.connectionState.collect { state ->
+                val isError = state is RfidManager.ConnectionState.Error
+                val isConnected = state is RfidManager.ConnectionState.Connected
+                binding.btnRetry.isVisible = isError
+                binding.btnScan.isEnabled = isConnected
                 binding.tvStatus.text = when (state) {
                     is RfidManager.ConnectionState.Disconnected -> "⚫ Desconectado"
                     is RfidManager.ConnectionState.Connecting -> "🟡 Conectando..."

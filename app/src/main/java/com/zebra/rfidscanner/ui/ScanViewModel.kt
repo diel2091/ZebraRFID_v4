@@ -28,20 +28,18 @@ class ScanViewModel @Inject constructor(
     private var isScanning = false
 
     fun initialize() = rfidManager.initialize()
+    fun retry() = rfidManager.retry()
 
     fun toggleScan(): Boolean {
         isScanning = if (isScanning) {
-            rfidManager.stopInventory()
-            false
+            rfidManager.stopInventory(); false
         } else {
-            rfidManager.startInventory()
-            true
+            rfidManager.startInventory(); true
         }
         return isScanning
     }
 
     fun clearAll() = viewModelScope.launch { repository.clearAll() }
-
     fun getTagsForExport(): List<String> = repository.getTagList()
 
     override fun onCleared() {
