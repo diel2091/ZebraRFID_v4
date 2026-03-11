@@ -18,7 +18,7 @@ private const val TAG = "RfidManager"
 class RfidManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repository: RfidRepository
-) : RfidEventsListener, Readers.RFIDReaderEventHandler {
+) : RfidEventsListener {
 
     sealed class ConnectionState {
         object Disconnected : ConnectionState()
@@ -35,6 +35,9 @@ class RfidManager @Inject constructor(
     private var reader: RFIDReader? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    // Nombre del lector confirmado en RFD123
+    private val READER_NAME = "RFD4030-G00B700-US"
+
     fun initialize() {
         scope.launch { createAndConnect() }
     }
@@ -42,22 +45,38 @@ class RfidManager @Inject constructor(
     private suspend fun createAndConnect() {
         _connectionState.value = ConnectionState.Connecting
         try {
-            // Dispose anterior
             try { readers?.Dispose() } catch (_: Exception) {}
             readers = null
             reader = null
+            delay(500)
 
-            delay(300)
-
-            // Usar BLUETOOTH — igual que el ejemplo oficial
+            // Intentar los 4 transportes igual que el ejemplo oficial de Zebra
             readers = Readers(context, ENUM_TRANSPORT.BLUETOOTH)
-
-            // Registrar handler para cuando aparezca/desaparezca un reader
-            // readers?.attach(this@RfidManager) -- no disponible en esta version
-
-            val list = readers?.GetAvailableRFIDReaderList()
-            Log.i(TAG, "Readers disponibles: ${list?.size ?: 0}")
+            var list = readers?.GetAvailableRFIDReaderList()
+            Log.i(TAG, "BLUETOOTH: ${list?.size ?: 0} readers")
             list?.forEach { Log.i(TAG, "  -> ${it.name}") }
+
+            if (list.isNullOrEmpty()) {
+                Log.i(TAG, "Probando SERVICE_SERIAL...")
+                readers?.setTransport(ENUM_TRANSPORT.SERVICE_SERIAL)
+                list = readers?.GetAvailableRFIDReaderList()
+                Log.i(TAG, "SERVICE_SERIAL: ${list?.size ?: 0} readers")
+            }
+
+            if (list.isNullOrEmpty()) {
+                Log.i(TAG, "Probando SERVICE_USB...")
+                readers?.setTransport(ENUM_TRANSPORT.SERVICE_USB)
+                list = readers?.GetAvailableRFIDReaderList()
+                Log.i(TAG, "SERVICE_USB: ${list?.size ?: 0} readers")
+            }
+
+            if (list.isNullOrEmpty()) {
+                Log.i(TAG, "Probando ALL...")
+                readers?.setTransport(ENUM_TRANSPORT.ALL)
+                list = readers?.GetAvailableRFIDReaderList()
+                Log.i(TAG, "ALL: ${list?.size ?: 0} readers")
+                list?.forEach { Log.i(TAG, "  -> ${it.name}") }
+            }
 
             if (list.isNullOrEmpty()) {
                 _connectionState.value = ConnectionState.Error(
@@ -66,15 +85,18 @@ class RfidManager @Inject constructor(
                 return
             }
 
-            readerDevice = list[0]
-            reader = readerDevice!!.getRFIDReader()  // getRFIDReader() como en el ejemplo oficial
+            // Buscar por nombre exacto, si no tomar el primero
+            readerDevice = list.firstOrNull { it.name.startsWith(READER_NAME) } ?: list[0]
+            Log.i(TAG, "Usando reader: ${readerDevice?.name}")
+
+            reader = readerDevice!!.getRFIDReader()
 
             if (reader == null) {
-                _connectionState.value = ConnectionState.Error("Error: getRFIDReader() devolvió null")
+                _connectionState.value = ConnectionState.Error("getRFIDReader() devolvió null")
                 return
             }
 
-            withContext(Dispatchers.IO) { doConnect() }
+            doConnect()
 
         } catch (e: Exception) {
             Log.e(TAG, "createAndConnect error", e)
@@ -119,12 +141,10 @@ class RfidManager @Inject constructor(
             reader!!.Events.setAttachTagDataWithReadEvent(false)
             reader!!.Events.setReaderDisconnectEvent(true)
 
-            // Modo RFID — igual que ejemplo oficial
             reader!!.Config.setTriggerMode(ENUM_TRIGGER_MODE.RFID_MODE, true)
             reader!!.Config.setStartTrigger(triggerInfo.StartTrigger)
             reader!!.Config.setStopTrigger(triggerInfo.StopTrigger)
 
-            // Potencia máxima
             val maxPower = reader!!.ReaderCapabilities.transmitPowerLevelValues.size - 1
             val antennaConfig = reader!!.Config.Antennas.getAntennaRfConfig(1)
             antennaConfig.setTransmitPowerIndex(maxPower)
@@ -132,35 +152,18 @@ class RfidManager @Inject constructor(
             antennaConfig.setTari(0)
             reader!!.Config.Antennas.setAntennaRfConfig(1, antennaConfig)
 
-            // Singulación S0
             val singControl = reader!!.Config.Antennas.getSingulationControl(1)
             singControl.setSession(SESSION.SESSION_S0)
             singControl.Action.setInventoryState(INVENTORY_STATE.INVENTORY_STATE_A)
             singControl.Action.setSLFlag(SL_FLAG.SL_ALL)
             reader!!.Config.Antennas.setSingulationControl(1, singControl)
 
-            // Limpiar prefiltros
             reader!!.Actions.PreFilters.deleteAll()
 
             Log.i(TAG, "Reader configurado OK")
         } catch (e: Exception) {
             Log.e(TAG, "configureReader error", e)
         }
-    }
-
-    // Llamado por el SDK cuando aparece un nuevo reader Bluetooth
-    override fun RFIDReaderAppeared(device: ReaderDevice?) {
-        Log.i(TAG, "RFIDReaderAppeared: ${device?.name}")
-        scope.launch {
-            delay(500)
-            createAndConnect()
-        }
-    }
-
-    override fun RFIDReaderDisappeared(device: ReaderDevice?) {
-        Log.w(TAG, "RFIDReaderDisappeared: ${device?.name}")
-        _connectionState.value = ConnectionState.Disconnected
-        reader = null
     }
 
     override fun eventReadNotify(e: RfidReadEvents?) {
