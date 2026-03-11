@@ -11,15 +11,11 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class RfidRepository @Inject constructor(
-    private val tagDao: TagDao
-) {
+class RfidRepository @Inject constructor(private val tagDao: TagDao) {
     private val tagMap = ConcurrentHashMap<String, Boolean>(8192)
     private val _tagCount = MutableStateFlow(0)
     val tagCount: StateFlow<Int> = _tagCount.asStateFlow()
-
     val allTags: Flow<List<TagEntry>> = tagDao.getAllTags()
-
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun onEpcReceived(epc: String) {
@@ -27,11 +23,8 @@ class RfidRepository @Inject constructor(
         _tagCount.value = tagMap.size
         scope.launch {
             try {
-                if (isNew) {
-                    tagDao.insert(TagEntry(epc = epc))
-                } else {
-                    tagDao.incrementCount(epc)
-                }
+                if (isNew) tagDao.insert(TagEntry(epc = epc))
+                else tagDao.incrementCount(epc)
             } catch (e: Exception) {
                 Log.e("Repository", "DB error", e)
             }

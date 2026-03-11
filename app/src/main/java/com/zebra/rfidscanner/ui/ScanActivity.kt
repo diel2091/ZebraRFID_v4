@@ -22,22 +22,19 @@ class ScanActivity : AppCompatActivity() {
     private lateinit var binding: ActivityScanBinding
     private val viewModel: ScanViewModel by viewModels()
     private val adapter = EpcAdapter()
+    private var isScanning = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        if (permissions.values.all { it }) {
-            viewModel.initialize()
-        } else {
-            Toast.makeText(this, "Permisos Bluetooth requeridos", Toast.LENGTH_LONG).show()
-        }
+    ) { perms ->
+        if (perms.values.all { it }) viewModel.initialize()
+        else Toast.makeText(this, "Se requieren permisos Bluetooth", Toast.LENGTH_LONG).show()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityScanBinding.inflate(layoutInflater)
         setContentView(binding.root)
-
         setupRecyclerView()
         setupButtons()
         observeState()
@@ -53,8 +50,19 @@ class ScanActivity : AppCompatActivity() {
     }
 
     private fun setupButtons() {
-        binding.btnScan.setOnClickListener { viewModel.toggleScan() }
-        binding.btnClear.setOnClickListener { viewModel.clearAll() }
+        binding.btnScan.setOnClickListener {
+            isScanning = viewModel.toggleScan()
+            binding.btnScan.text = if (isScanning) "DETENER" else "ESCANEAR"
+            binding.btnScan.backgroundTintList = android.content.res.ColorStateList.valueOf(
+                if (isScanning) android.graphics.Color.parseColor("#FF5252")
+                else android.graphics.Color.parseColor("#00E5FF")
+            )
+        }
+        binding.btnClear.setOnClickListener {
+            viewModel.clearAll()
+            isScanning = false
+            binding.btnScan.text = "ESCANEAR"
+        }
         binding.btnExport.setOnClickListener { exportCsv() }
     }
 
@@ -62,10 +70,10 @@ class ScanActivity : AppCompatActivity() {
         lifecycleScope.launch {
             viewModel.connectionState.collect { state ->
                 binding.tvStatus.text = when (state) {
-                    is RfidManager.ConnectionState.Disconnected -> "Desconectado"
-                    is RfidManager.ConnectionState.Connecting -> "Conectando..."
-                    is RfidManager.ConnectionState.Connected -> "✓ ${state.readerName}"
-                    is RfidManager.ConnectionState.Error -> "Error: ${state.message}"
+                    is RfidManager.ConnectionState.Disconnected -> "⚫ Desconectado"
+                    is RfidManager.ConnectionState.Connecting -> "🟡 Conectando..."
+                    is RfidManager.ConnectionState.Connected -> "🟢 ${state.readerName}"
+                    is RfidManager.ConnectionState.Error -> "🔴 ${state.message}"
                 }
             }
         }
@@ -82,15 +90,12 @@ class ScanActivity : AppCompatActivity() {
     }
 
     private fun checkPermissionsAndInit() {
-        val needed = mutableListOf<String>()
-        val perms = listOf(
+        val needed = listOf(
             Manifest.permission.BLUETOOTH_SCAN,
-            Manifest.permission.BLUETOOTH_CONNECT
-        )
-        perms.forEach { p ->
-            if (ContextCompat.checkSelfPermission(this, p) != PackageManager.PERMISSION_GRANTED) {
-                needed.add(p)
-            }
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ).filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
         if (needed.isEmpty()) viewModel.initialize()
         else permissionLauncher.launch(needed.toTypedArray())
@@ -103,10 +108,12 @@ class ScanActivity : AppCompatActivity() {
             return
         }
         val path = CsvExporter.export(this, tags)
-        if (path != null) {
-            Toast.makeText(this, "Exportado: $path", Toast.LENGTH_LONG).show()
-        } else {
-            Toast.makeText(this, "Error al exportar", Toast.LENGTH_SHORT).show()
-        }
+        if (path != null) Toast.makeText(this, "✓ Exportado: $path", Toast.LENGTH_LONG).show()
+        else Toast.makeText(this, "Error al exportar", Toast.LENGTH_SHORT).show()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (isScanning) viewModel.toggleScan()
     }
 }

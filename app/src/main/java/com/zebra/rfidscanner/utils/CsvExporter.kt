@@ -27,13 +27,9 @@ object CsvExporter {
                     put(MediaStore.Downloads.MIME_TYPE, "text/csv")
                     put(MediaStore.Downloads.IS_PENDING, 1)
                 }
-                val uri = context.contentResolver.insert(
-                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
-                )
+                val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 uri?.let {
-                    context.contentResolver.openOutputStream(it)?.use { out ->
-                        out.write(csv.toByteArray())
-                    }
+                    context.contentResolver.openOutputStream(it)?.use { out -> out.write(csv.toByteArray()) }
                     values.clear()
                     values.put(MediaStore.Downloads.IS_PENDING, 0)
                     context.contentResolver.update(it, values, null, null)

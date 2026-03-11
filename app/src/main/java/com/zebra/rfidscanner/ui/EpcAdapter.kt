@@ -23,9 +23,7 @@ class EpcAdapter : ListAdapter<TagEntry, EpcAdapter.ViewHolder>(DIFF) {
         return ViewHolder(binding)
     }
 
-    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-        holder.bind(getItem(position))
-    }
+    override fun onBindViewHolder(holder: ViewHolder, position: Int) = holder.bind(getItem(position))
 
     companion object {
         val DIFF = object : DiffUtil.ItemCallback<TagEntry>() {

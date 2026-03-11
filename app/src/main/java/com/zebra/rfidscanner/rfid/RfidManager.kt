@@ -2,12 +2,12 @@ package com.zebra.rfidscanner.rfid
 
 import android.content.Context
 import android.util.Log
+import com.zebra.rfid.api3.*
 import com.zebra.rfidscanner.data.RfidRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.lang.reflect.Proxy
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -17,7 +17,8 @@ private const val TAG = "RfidManager"
 class RfidManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repository: RfidRepository
-) {
+) : RfidEventsListener {
+
     sealed class ConnectionState {
         object Disconnected : ConnectionState()
         object Connecting : ConnectionState()
@@ -28,161 +29,144 @@ class RfidManager @Inject constructor(
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    private var emdkManager: Any? = null
-    private var rfidReader: Any? = null
+    private var readers: Readers? = null
+    private var reader: RFIDReader? = null
 
     fun initialize() {
         _connectionState.value = ConnectionState.Connecting
         try {
-            val emdkManagerClass = Class.forName("com.symbol.emdk.EMDKManager")
-            val listenerClass = Class.forName("com.symbol.emdk.EMDKManager\$EMDKListener")
-
-            val proxy = Proxy.newProxyInstance(
-                listenerClass.classLoader, arrayOf(listenerClass)
-            ) { _, method, args ->
-                when (method.name) {
-                    "onOpened" -> onOpened(args?.get(0))
-                    "onClosed" -> onClosed()
-                }
-                null
-            }
-
-            val getEMDKManager = emdkManagerClass.getMethod(
-                "getEMDKManager", Context::class.java, listenerClass
-            )
-            getEMDKManager.invoke(null, context, proxy)
-            Log.i(TAG, "EMDK init requested")
-
-        } catch (e: ClassNotFoundException) {
-            Log.e(TAG, "EMDK not found", e)
-            _connectionState.value = ConnectionState.Error("EMDK no disponible")
+            readers = Readers(context, ENUM_TRANSPORT.ALL)
+            connectReader()
         } catch (e: Exception) {
-            Log.e(TAG, "EMDK init error", e)
-            _connectionState.value = ConnectionState.Error("Error: ${e.message}")
+            Log.e(TAG, "init error", e)
+            _connectionState.value = ConnectionState.Error("Init error: ${e.message}")
         }
-    }
-
-    private fun onOpened(manager: Any?) {
-        emdkManager = manager
-        Log.i(TAG, "EMDK opened")
-        connectReader()
-    }
-
-    private fun onClosed() {
-        Log.w(TAG, "EMDK closed")
-        rfidReader = null
-        emdkManager = null
-        _connectionState.value = ConnectionState.Disconnected
     }
 
     private fun connectReader() {
         try {
-            val featureTypeClass = Class.forName("com.symbol.emdk.EMDKManager\$FEATURE_TYPE")
-            val rfidFeature = featureTypeClass.enumConstants?.firstOrNull {
-                (it as Enum<*>).name == "RFID"
-            }
-            val getInstance = emdkManager!!.javaClass.getMethod("getInstance", featureTypeClass)
-            val rfidMgr = getInstance.invoke(emdkManager, rfidFeature)
-
-            val readerList = rfidMgr?.javaClass
-                ?.getMethod("getSupportedRFIDReaderList")
-                ?.invoke(rfidMgr) as? List<*>
+            val readerList = readers?.GetAvailableRFIDReaderList()
+            Log.i(TAG, "Lectores disponibles: ${readerList?.size ?: 0}")
 
             if (readerList.isNullOrEmpty()) {
-                _connectionState.value = ConnectionState.Error("No hay lectores RFID disponibles")
+                _connectionState.value = ConnectionState.Error(
+                    "No se encontró RFD4030. Asegúrese de que esté encendido y emparejado por Bluetooth."
+                )
                 return
             }
 
-            val readerInfo = readerList[0]!!
-            val readerId = readerInfo.javaClass.getMethod("getReaderID").invoke(readerInfo)
-            val readerName = readerInfo.javaClass.getMethod("getName").invoke(readerInfo) as? String ?: "RFD40"
+            val readerDevice = readerList[0]
+            reader = readerDevice.rfidReader
 
-            val getRFIDReader = rfidMgr!!.javaClass.getMethod("getRFIDReader", readerId!!.javaClass)
-            rfidReader = getRFIDReader.invoke(rfidMgr, readerId)
-
-            rfidReader!!.javaClass.getMethod("connect").invoke(rfidReader)
-            setupEventListener()
-            _connectionState.value = ConnectionState.Connected(readerName)
-            Log.i(TAG, "Connected: $readerName")
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Connect error", e)
-            _connectionState.value = ConnectionState.Error("Error conexión: ${e.message}")
-        }
-    }
-
-    private fun setupEventListener() {
-        try {
-            val listenerClass = Class.forName("com.symbol.emdk.rfid.RfidEventsListener")
-            val eventsObj = rfidReader?.javaClass?.getMethod("getEvents")?.invoke(rfidReader)
-
-            val proxy = Proxy.newProxyInstance(
-                listenerClass.classLoader, arrayOf(listenerClass)
-            ) { _, method, args ->
-                when (method.name) {
-                    "eventReadNotify" -> handleTagRead(args?.get(0))
-                    "eventStatusNotify" -> handleStatus(args?.get(0))
-                }
-                null
+            if (reader?.isConnected == true) {
+                Log.i(TAG, "Ya conectado: ${readerDevice.name}")
+                _connectionState.value = ConnectionState.Connected(readerDevice.name ?: "RFD4030")
+                return
             }
 
-            eventsObj?.javaClass?.getMethod("addEventsListener", listenerClass)?.invoke(eventsObj, proxy)
-            eventsObj?.javaClass?.getMethod("setTagReadEvent", Boolean::class.java)?.invoke(eventsObj, true)
-            eventsObj?.javaClass?.getMethod("setReaderDisconnectEvent", Boolean::class.java)?.invoke(eventsObj, true)
+            Log.i(TAG, "Conectando a: ${readerDevice.name}")
+            reader?.connect()
+            configureReader()
+            _connectionState.value = ConnectionState.Connected(readerDevice.name ?: "RFD4030")
+            Log.i(TAG, "Conectado OK")
 
+        } catch (e: InvalidUsageException) {
+            Log.e(TAG, "InvalidUsage: ${e.message}", e)
+            _connectionState.value = ConnectionState.Error("InvalidUsage: ${e.message}")
+        } catch (e: OperationFailureException) {
+            Log.e(TAG, "OperationFailure: ${e.results}", e)
+            _connectionState.value = ConnectionState.Error("OperationFailure: ${e.results}")
         } catch (e: Exception) {
-            Log.e(TAG, "Listener setup error", e)
+            Log.e(TAG, "connect error", e)
+            _connectionState.value = ConnectionState.Error("Error: ${e.message}")
         }
     }
 
-    private fun handleTagRead(event: Any?) {
+    private fun configureReader() {
         try {
-            val data = event?.javaClass?.getMethod("getReadEventData")?.invoke(event)
-            val tags = data?.javaClass?.getMethod("getTagData")?.invoke(data) as? Array<*>
+            reader?.Events?.addEventsListener(this)
+            reader?.Events?.setTagReadEvent(true)
+            reader?.Events?.setReaderDisconnectEvent(true)
+            reader?.Events?.setAttachTagDataWithReadEvent(false)
+
+            val triggerInfo = TriggerInfo()
+            triggerInfo.StartTrigger.triggerType = START_TRIGGER_TYPE.START_TRIGGER_TYPE_IMMEDIATE
+            triggerInfo.StopTrigger.triggerType = STOP_TRIGGER_TYPE.STOP_TRIGGER_TYPE_IMMEDIATE
+            reader?.Config?.startTrigger = triggerInfo.StartTrigger
+            reader?.Config?.stopTrigger = triggerInfo.StopTrigger
+
+            // Sesion S1 + AB_FLIP para alto volumen de tags
+            val singConfig = reader?.Config?.SingulationControl
+            singConfig?.session = SESSION.SESSION_S1
+            singConfig?.Action?.inventoryState = INVENTORY_STATE.INVENTORY_STATE_AB_FLIP
+            reader?.Config?.SingulationControl = singConfig
+
+            Log.i(TAG, "Reader configurado OK")
+        } catch (e: Exception) {
+            Log.e(TAG, "configureReader error", e)
+        }
+    }
+
+    override fun eventReadNotify(e: RfidReadEvents?) {
+        try {
+            val tags = reader?.Actions?.getReadTags(100)
             tags?.forEach { tag ->
-                val epc = tag?.javaClass?.getMethod("getTagID")?.invoke(tag) as? String
-                if (!epc.isNullOrBlank()) repository.onEpcReceived(epc)
+                val epc = tag?.tagID
+                if (!epc.isNullOrBlank()) {
+                    repository.onEpcReceived(epc)
+                }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Tag read error", e)
+        } catch (ex: Exception) {
+            Log.e(TAG, "eventReadNotify error", ex)
         }
     }
 
-    private fun handleStatus(event: Any?) {
-        try {
-            val statusData = event?.javaClass?.getMethod("getStatusEventData")?.invoke(event)
-            val type = statusData?.javaClass?.getMethod("getStatusEventType")?.invoke(statusData)
-            if (type?.toString() == "DISCONNECTION_EVENT") {
+    override fun eventStatusNotify(e: RfidStatusEvents?) {
+        val type = e?.StatusEventData?.statusEventType
+        Log.d(TAG, "Status: $type")
+        when (type) {
+            STATUS_EVENT_TYPE.DISCONNECTION_EVENT -> {
                 _connectionState.value = ConnectionState.Disconnected
-                rfidReader = null
+                reader = null
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Status error", e)
+            STATUS_EVENT_TYPE.RECONNECTION_EVENT -> {
+                _connectionState.value = ConnectionState.Connecting
+                connectReader()
+            }
+            else -> {}
         }
     }
 
     fun startInventory(): Boolean = try {
-        val actions = rfidReader?.javaClass?.getMethod("getActions")?.invoke(rfidReader)
-        val inv = actions?.javaClass?.getMethod("getInventory")?.invoke(actions)
-        inv?.javaClass?.getMethod("perform")?.invoke(inv)
+        reader?.Actions?.Inventory?.perform()
+        Log.i(TAG, "Inventory started")
         true
-    } catch (e: Exception) { false }
+    } catch (e: Exception) {
+        Log.e(TAG, "startInventory error", e)
+        false
+    }
 
     fun stopInventory(): Boolean = try {
-        val actions = rfidReader?.javaClass?.getMethod("getActions")?.invoke(rfidReader)
-        val inv = actions?.javaClass?.getMethod("getInventory")?.invoke(actions)
-        inv?.javaClass?.getMethod("stop")?.invoke(inv)
+        reader?.Actions?.Inventory?.stop()
         true
-    } catch (e: Exception) { false }
+    } catch (e: Exception) {
+        Log.e(TAG, "stopInventory error", e)
+        false
+    }
 
-    fun isConnected(): Boolean = try {
-        rfidReader?.javaClass?.getMethod("isConnected")?.invoke(rfidReader) as? Boolean ?: false
-    } catch (e: Exception) { false }
+    fun isConnected(): Boolean = reader?.isConnected == true
 
     fun release() {
-        try { rfidReader?.javaClass?.getMethod("disconnect")?.invoke(rfidReader) } catch (e: Exception) { }
-        rfidReader = null
-        emdkManager = null
-        _connectionState.value = ConnectionState.Disconnected
+        try {
+            reader?.Events?.removeEventsListener(this)
+            reader?.disconnect()
+        } catch (e: Exception) {
+            Log.e(TAG, "release error", e)
+        } finally {
+            reader = null
+            readers?.Dispose()
+            readers = null
+            _connectionState.value = ConnectionState.Disconnected
+        }
     }
 }

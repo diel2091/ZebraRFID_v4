@@ -29,7 +29,7 @@ class ScanViewModel @Inject constructor(
 
     fun initialize() = rfidManager.initialize()
 
-    fun toggleScan() {
+    fun toggleScan(): Boolean {
         isScanning = if (isScanning) {
             rfidManager.stopInventory()
             false
@@ -37,6 +37,7 @@ class ScanViewModel @Inject constructor(
             rfidManager.startInventory()
             true
         }
+        return isScanning
     }
 
     fun clearAll() = viewModelScope.launch { repository.clearAll() }
