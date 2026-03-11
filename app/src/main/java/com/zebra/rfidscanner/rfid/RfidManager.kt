@@ -18,7 +18,7 @@ private const val TAG = "RfidManager"
 class RfidManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repository: RfidRepository
-) : RfidEventsListener {
+) : RfidEventsListener, Readers.RFIDReaderEventHandler {
 
     sealed class ConnectionState {
         object Disconnected : ConnectionState()
@@ -31,105 +31,136 @@ class RfidManager @Inject constructor(
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
     private var readers: Readers? = null
+    private var readerDevice: ReaderDevice? = null
     private var reader: RFIDReader? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun initialize() {
-        scope.launch { tryConnect() }
+        scope.launch { createAndConnect() }
     }
 
-    private suspend fun tryConnect(attempt: Int = 1) {
-        Log.i(TAG, "Intento $attempt de conexión")
+    private suspend fun createAndConnect() {
         _connectionState.value = ConnectionState.Connecting
-
         try {
+            // Dispose anterior
             try { readers?.Dispose() } catch (_: Exception) {}
             readers = null
             reader = null
 
-            delay(500)
+            delay(300)
 
-            readers = Readers(context, ENUM_TRANSPORT.ALL)
+            // Usar BLUETOOTH — igual que el ejemplo oficial
+            readers = Readers(context, ENUM_TRANSPORT.BLUETOOTH)
 
-            val readerList = readers?.GetAvailableRFIDReaderList()
-            Log.i(TAG, "Lectores encontrados: ${readerList?.size ?: 0}")
-            readerList?.forEachIndexed { i, r ->
-                Log.i(TAG, "  Reader[$i]: name=${r.name}")
-            }
+            // Registrar handler para cuando aparezca/desaparezca un reader
+            readers?.attach(this@RfidManager)
 
-            if (readerList.isNullOrEmpty()) {
-                if (attempt < 5) {
-                    _connectionState.value = ConnectionState.Error(
-                        "Buscando RFD4030... (intento $attempt/5)"
-                    )
-                    delay(3000)
-                    tryConnect(attempt + 1)
-                } else {
-                    _connectionState.value = ConnectionState.Error(
-                        "No se encontró el RFD4030.\n• Verifique que esté encendido\n• Presione Reintentar"
-                    )
-                }
+            val list = readers?.GetAvailableRFIDReaderList()
+            Log.i(TAG, "Readers disponibles: ${list?.size ?: 0}")
+            list?.forEach { Log.i(TAG, "  -> ${it.name}") }
+
+            if (list.isNullOrEmpty()) {
+                _connectionState.value = ConnectionState.Error(
+                    "No se encontró el RFD4030.\n• Verifique que esté encendido\n• Presione Reintentar"
+                )
                 return
             }
 
-            val readerDevice = readerList[0]
-            reader = readerDevice.rfidReader
+            readerDevice = list[0]
+            reader = readerDevice!!.getRFIDReader()  // getRFIDReader() como en el ejemplo oficial
 
             if (reader == null) {
-                _connectionState.value = ConnectionState.Error("reader null — reinicie el RFD4030")
+                _connectionState.value = ConnectionState.Error("Error: getRFIDReader() devolvió null")
                 return
             }
 
-            if (reader?.isConnected == true) {
-                configureReader()
-                _connectionState.value = ConnectionState.Connected(readerDevice.name ?: "RFD4030")
-                return
-            }
+            withContext(Dispatchers.IO) { doConnect() }
 
-            Log.i(TAG, "Conectando a: ${readerDevice.name}")
-            reader?.connect()
-            configureReader()
-            _connectionState.value = ConnectionState.Connected(readerDevice.name ?: "RFD4030")
-            Log.i(TAG, "¡Conectado!")
-
-        } catch (e: InvalidUsageException) {
-            Log.e(TAG, "InvalidUsage $attempt: ${e.message}", e)
-            retryOrFail(attempt, "InvalidUsage: ${e.message}")
-        } catch (e: OperationFailureException) {
-            Log.e(TAG, "OperationFailure $attempt: ${e.results}", e)
-            retryOrFail(attempt, "Fallo: ${e.results}")
         } catch (e: Exception) {
-            Log.e(TAG, "Error $attempt: ${e.message}", e)
-            retryOrFail(attempt, "Error: ${e.message}")
+            Log.e(TAG, "createAndConnect error", e)
+            _connectionState.value = ConnectionState.Error("Error: ${e.message}")
         }
     }
 
-    private suspend fun retryOrFail(attempt: Int, msg: String) {
-        if (attempt < 3) {
-            delay(2000)
-            tryConnect(attempt + 1)
-        } else {
-            _connectionState.value = ConnectionState.Error(msg)
+    private fun doConnect() {
+        try {
+            if (reader?.isConnected == true) {
+                Log.i(TAG, "Ya conectado")
+                configureReader()
+                _connectionState.value = ConnectionState.Connected(readerDevice?.name ?: "RFD4030")
+                return
+            }
+
+            Log.i(TAG, "Conectando a ${readerDevice?.name}...")
+            reader?.connect()
+            configureReader()
+            _connectionState.value = ConnectionState.Connected(readerDevice?.name ?: "RFD4030")
+            Log.i(TAG, "Conectado OK")
+
+        } catch (e: InvalidUsageException) {
+            Log.e(TAG, "InvalidUsage: ${e.message}", e)
+            _connectionState.value = ConnectionState.Error("InvalidUsage: ${e.message}")
+        } catch (e: OperationFailureException) {
+            Log.e(TAG, "OperationFailure: ${e.results} ${e.vendorMessage}", e)
+            _connectionState.value = ConnectionState.Error("Fallo: ${e.results} ${e.vendorMessage}")
         }
     }
 
     private fun configureReader() {
+        if (reader?.isConnected != true) return
         try {
-            reader?.Events?.addEventsListener(this)
-            reader?.Events?.setTagReadEvent(true)
-            reader?.Events?.setReaderDisconnectEvent(true)
-            reader?.Events?.setAttachTagDataWithReadEvent(false)
-
             val triggerInfo = TriggerInfo()
-            triggerInfo.StartTrigger.triggerType = START_TRIGGER_TYPE.START_TRIGGER_TYPE_IMMEDIATE
-            triggerInfo.StopTrigger.triggerType = STOP_TRIGGER_TYPE.STOP_TRIGGER_TYPE_IMMEDIATE
-            reader?.Config?.startTrigger = triggerInfo.StartTrigger
-            reader?.Config?.stopTrigger = triggerInfo.StopTrigger
+            triggerInfo.StartTrigger.setTriggerType(START_TRIGGER_TYPE.START_TRIGGER_TYPE_IMMEDIATE)
+            triggerInfo.StopTrigger.setTriggerType(STOP_TRIGGER_TYPE.STOP_TRIGGER_TYPE_IMMEDIATE)
+
+            reader!!.Events.addEventsListener(this)
+            reader!!.Events.setHandheldEvent(true)
+            reader!!.Events.setTagReadEvent(true)
+            reader!!.Events.setAttachTagDataWithReadEvent(false)
+            reader!!.Events.setReaderDisconnectEvent(true)
+
+            // Modo RFID — igual que ejemplo oficial
+            reader!!.Config.setTriggerMode(ENUM_TRIGGER_MODE.RFID_MODE, true)
+            reader!!.Config.setStartTrigger(triggerInfo.StartTrigger)
+            reader!!.Config.setStopTrigger(triggerInfo.StopTrigger)
+
+            // Potencia máxima
+            val maxPower = reader!!.ReaderCapabilities.transmitPowerLevelValues.size - 1
+            val antennaConfig = reader!!.Config.Antennas.getAntennaRfConfig(1)
+            antennaConfig.setTransmitPowerIndex(maxPower)
+            antennaConfig.setrfModeTableIndex(0)
+            antennaConfig.setTari(0)
+            reader!!.Config.Antennas.setAntennaRfConfig(1, antennaConfig)
+
+            // Singulación S0
+            val singControl = reader!!.Config.Antennas.getSingulationControl(1)
+            singControl.setSession(SESSION.SESSION_S0)
+            singControl.Action.setInventoryState(INVENTORY_STATE.INVENTORY_STATE_A)
+            singControl.Action.setSLFlag(SL_FLAG.SL_ALL)
+            reader!!.Config.Antennas.setSingulationControl(1, singControl)
+
+            // Limpiar prefiltros
+            reader!!.Actions.PreFilters.deleteAll()
 
             Log.i(TAG, "Reader configurado OK")
         } catch (e: Exception) {
             Log.e(TAG, "configureReader error", e)
         }
+    }
+
+    // Llamado por el SDK cuando aparece un nuevo reader Bluetooth
+    override fun RFIDReaderAppeared(device: ReaderDevice?) {
+        Log.i(TAG, "RFIDReaderAppeared: ${device?.name}")
+        scope.launch {
+            delay(500)
+            createAndConnect()
+        }
+    }
+
+    override fun RFIDReaderDisappeared(device: ReaderDevice?) {
+        Log.w(TAG, "RFIDReaderDisappeared: ${device?.name}")
+        _connectionState.value = ConnectionState.Disconnected
+        reader = null
     }
 
     override fun eventReadNotify(e: RfidReadEvents?) {
@@ -148,16 +179,24 @@ class RfidManager @Inject constructor(
         val type = e?.StatusEventData?.statusEventType
         Log.d(TAG, "Status: $type")
         when (type) {
+            STATUS_EVENT_TYPE.HANDHELD_TRIGGER_EVENT -> {
+                val handEvent = e.StatusEventData.HandheldTriggerEventData.handheldEvent
+                if (handEvent == HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_PRESSED) {
+                    startInventory()
+                } else if (handEvent == HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_RELEASED) {
+                    stopInventory()
+                }
+            }
             STATUS_EVENT_TYPE.DISCONNECTION_EVENT -> {
                 _connectionState.value = ConnectionState.Disconnected
                 reader = null
-                scope.launch { delay(3000); tryConnect() }
+                scope.launch { delay(3000); createAndConnect() }
             }
             else -> {}
         }
     }
 
-    fun retry() { scope.launch { tryConnect() } }
+    fun retry() { scope.launch { createAndConnect() } }
 
     fun startInventory(): Boolean = try {
         reader?.Actions?.Inventory?.perform(); true
