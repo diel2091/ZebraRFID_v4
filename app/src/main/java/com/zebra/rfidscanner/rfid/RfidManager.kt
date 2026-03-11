@@ -47,10 +47,11 @@ class RfidManager @Inject constructor(
         try {
             val readerList = readers?.GetAvailableRFIDReaderList()
             Log.i(TAG, "Lectores disponibles: ${readerList?.size ?: 0}")
+            readerList?.forEachIndexed { i, r -> Log.i(TAG, "Reader[$i]: ${r.name}") }
 
             if (readerList.isNullOrEmpty()) {
                 _connectionState.value = ConnectionState.Error(
-                    "No se encontró RFD4030. Asegúrese de que esté encendido y emparejado por Bluetooth."
+                    "No se encontró RFD4030.\nAsegúrese de que esté encendido y emparejado por Bluetooth."
                 )
                 return
             }
@@ -60,6 +61,7 @@ class RfidManager @Inject constructor(
 
             if (reader?.isConnected == true) {
                 Log.i(TAG, "Ya conectado: ${readerDevice.name}")
+                configureReader()
                 _connectionState.value = ConnectionState.Connected(readerDevice.name ?: "RFD4030")
                 return
             }
@@ -95,12 +97,6 @@ class RfidManager @Inject constructor(
             reader?.Config?.startTrigger = triggerInfo.StartTrigger
             reader?.Config?.stopTrigger = triggerInfo.StopTrigger
 
-            // Sesion S1 + AB_FLIP para alto volumen de tags
-            val singConfig = reader?.Config?.SingulationControl
-            singConfig?.session = SESSION.SESSION_S1
-            singConfig?.Action?.inventoryState = INVENTORY_STATE.INVENTORY_STATE_AB_FLIP
-            reader?.Config?.SingulationControl = singConfig
-
             Log.i(TAG, "Reader configurado OK")
         } catch (e: Exception) {
             Log.e(TAG, "configureReader error", e)
@@ -123,17 +119,14 @@ class RfidManager @Inject constructor(
 
     override fun eventStatusNotify(e: RfidStatusEvents?) {
         val type = e?.StatusEventData?.statusEventType
-        Log.d(TAG, "Status: $type")
+        Log.d(TAG, "Status event: $type")
         when (type) {
             STATUS_EVENT_TYPE.DISCONNECTION_EVENT -> {
+                Log.w(TAG, "Reader desconectado")
                 _connectionState.value = ConnectionState.Disconnected
                 reader = null
             }
-            STATUS_EVENT_TYPE.RECONNECTION_EVENT -> {
-                _connectionState.value = ConnectionState.Connecting
-                connectReader()
-            }
-            else -> {}
+            else -> Log.d(TAG, "Status ignorado: $type")
         }
     }
 
