@@ -5,9 +5,11 @@ import androidx.lifecycle.viewModelScope
 import com.zebra.rfidscanner.data.RfidRepository
 import com.zebra.rfidscanner.data.TagEntry
 import com.zebra.rfidscanner.rfid.RfidManager
+import com.zebra.rfidscanner.utils.SgtinDecoder
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -19,11 +21,18 @@ class ScanViewModel @Inject constructor(
 ) : ViewModel() {
 
     val connectionState = rfidManager.connectionState
-    val tagCount = repository.tagCount
+    val tagCount   = repository.tagCount
+    val totalReads = repository.totalReads
+    val readRate   = repository.readRate
 
     val tags: StateFlow<List<TagEntry>> = repository.allTags.stateIn(
         viewModelScope, SharingStarted.Lazily, emptyList()
     )
+
+    // EAN mode: decode tags
+    val eanResults: StateFlow<List<SgtinDecoder.SgtinResult>> = repository.allTags.map { list ->
+        list.map { SgtinDecoder.decode(it.epc) }
+    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     private var isScanning = false
 
