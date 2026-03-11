@@ -55,7 +55,7 @@ class RfidManager @Inject constructor(
             val readerList = readers?.GetAvailableRFIDReaderList()
             Log.i(TAG, "Lectores encontrados: ${readerList?.size ?: 0}")
             readerList?.forEachIndexed { i, r ->
-                Log.i(TAG, "  Reader[$i]: name=${r.name} active=${r.isActive}")
+                Log.i(TAG, "  Reader[$i]: name=${r.name}")
             }
 
             if (readerList.isNullOrEmpty()) {
