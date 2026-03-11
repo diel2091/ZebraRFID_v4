@@ -43,14 +43,13 @@ class RfidManager @Inject constructor(
         _connectionState.value = ConnectionState.Connecting
 
         try {
-            // Dispose anterior si existe
             try { readers?.Dispose() } catch (_: Exception) {}
             readers = null
             reader = null
 
             delay(500)
 
-            readers = Readers(context, ENUM_TRANSPORT.BLUETOOTH)
+            readers = Readers(context, ENUM_TRANSPORT.ALL)
 
             val readerList = readers?.GetAvailableRFIDReaderList()
             Log.i(TAG, "Lectores encontrados: ${readerList?.size ?: 0}")
@@ -60,15 +59,14 @@ class RfidManager @Inject constructor(
 
             if (readerList.isNullOrEmpty()) {
                 if (attempt < 5) {
-                    Log.w(TAG, "Sin lectores, reintentando en 3s...")
                     _connectionState.value = ConnectionState.Error(
-                        "Buscando RFD4030... (intento $attempt/5)\nAsegúrese que esté encendido y emparejado."
+                        "Buscando RFD4030... (intento $attempt/5)"
                     )
                     delay(3000)
                     tryConnect(attempt + 1)
                 } else {
                     _connectionState.value = ConnectionState.Error(
-                        "No se encontró el RFD4030.\n• Verifique que esté encendido\n• Emparéjelo por Bluetooth en Configuración\n• Luego presione Reintentar"
+                        "No se encontró el RFD4030.\n• Verifique que esté encendido\n• Presione Reintentar"
                     )
                 }
                 return
@@ -78,13 +76,11 @@ class RfidManager @Inject constructor(
             reader = readerDevice.rfidReader
 
             if (reader == null) {
-                Log.e(TAG, "rfidReader es null para ${readerDevice.name}")
-                _connectionState.value = ConnectionState.Error("Error interno: reader null. Intente reiniciar el RFD4030.")
+                _connectionState.value = ConnectionState.Error("reader null — reinicie el RFD4030")
                 return
             }
 
             if (reader?.isConnected == true) {
-                Log.i(TAG, "Ya estaba conectado: ${readerDevice.name}")
                 configureReader()
                 _connectionState.value = ConnectionState.Connected(readerDevice.name ?: "RFD4030")
                 return
@@ -97,29 +93,23 @@ class RfidManager @Inject constructor(
             Log.i(TAG, "¡Conectado!")
 
         } catch (e: InvalidUsageException) {
-            Log.e(TAG, "InvalidUsage intento $attempt: ${e.message}", e)
-            if (attempt < 3) {
-                delay(2000)
-                tryConnect(attempt + 1)
-            } else {
-                _connectionState.value = ConnectionState.Error("Error: ${e.message}")
-            }
+            Log.e(TAG, "InvalidUsage $attempt: ${e.message}", e)
+            retryOrFail(attempt, "InvalidUsage: ${e.message}")
         } catch (e: OperationFailureException) {
-            Log.e(TAG, "OperationFailure intento $attempt: ${e.results}", e)
-            if (attempt < 3) {
-                delay(2000)
-                tryConnect(attempt + 1)
-            } else {
-                _connectionState.value = ConnectionState.Error("Fallo: ${e.results}")
-            }
+            Log.e(TAG, "OperationFailure $attempt: ${e.results}", e)
+            retryOrFail(attempt, "Fallo: ${e.results}")
         } catch (e: Exception) {
-            Log.e(TAG, "Error intento $attempt: ${e.message}", e)
-            if (attempt < 3) {
-                delay(2000)
-                tryConnect(attempt + 1)
-            } else {
-                _connectionState.value = ConnectionState.Error("Error: ${e.message}")
-            }
+            Log.e(TAG, "Error $attempt: ${e.message}", e)
+            retryOrFail(attempt, "Error: ${e.message}")
+        }
+    }
+
+    private suspend fun retryOrFail(attempt: Int, msg: String) {
+        if (attempt < 3) {
+            delay(2000)
+            tryConnect(attempt + 1)
+        } else {
+            _connectionState.value = ConnectionState.Error(msg)
         }
     }
 
@@ -159,14 +149,9 @@ class RfidManager @Inject constructor(
         Log.d(TAG, "Status: $type")
         when (type) {
             STATUS_EVENT_TYPE.DISCONNECTION_EVENT -> {
-                Log.w(TAG, "Reader desconectado")
                 _connectionState.value = ConnectionState.Disconnected
                 reader = null
-                // Reconectar automáticamente
-                scope.launch {
-                    delay(3000)
-                    tryConnect()
-                }
+                scope.launch { delay(3000); tryConnect() }
             }
             else -> {}
         }
@@ -175,20 +160,12 @@ class RfidManager @Inject constructor(
     fun retry() { scope.launch { tryConnect() } }
 
     fun startInventory(): Boolean = try {
-        reader?.Actions?.Inventory?.perform()
-        true
-    } catch (e: Exception) {
-        Log.e(TAG, "startInventory error", e)
-        false
-    }
+        reader?.Actions?.Inventory?.perform(); true
+    } catch (e: Exception) { Log.e(TAG, "startInventory error", e); false }
 
     fun stopInventory(): Boolean = try {
-        reader?.Actions?.Inventory?.stop()
-        true
-    } catch (e: Exception) {
-        Log.e(TAG, "stopInventory error", e)
-        false
-    }
+        reader?.Actions?.Inventory?.stop(); true
+    } catch (e: Exception) { Log.e(TAG, "stopInventory error", e); false }
 
     fun isConnected(): Boolean = reader?.isConnected == true
 
