@@ -53,7 +53,7 @@ class RfidManager @Inject constructor(
             readers = Readers(context, ENUM_TRANSPORT.BLUETOOTH)
 
             // Registrar handler para cuando aparezca/desaparezca un reader
-            readers?.attach(this@RfidManager)
+            // readers?.attach(this@RfidManager) -- no disponible en esta version
 
             val list = readers?.GetAvailableRFIDReaderList()
             Log.i(TAG, "Readers disponibles: ${list?.size ?: 0}")
@@ -180,7 +180,7 @@ class RfidManager @Inject constructor(
         Log.d(TAG, "Status: $type")
         when (type) {
             STATUS_EVENT_TYPE.HANDHELD_TRIGGER_EVENT -> {
-                val handEvent = e.StatusEventData.HandheldTriggerEventData.handheldEvent
+                val handEvent = e?.StatusEventData?.HandheldTriggerEventData?.handheldEvent
                 if (handEvent == HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_PRESSED) {
                     startInventory()
                 } else if (handEvent == HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_RELEASED) {
