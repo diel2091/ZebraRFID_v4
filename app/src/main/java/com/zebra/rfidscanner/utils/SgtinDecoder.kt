@@ -15,7 +15,8 @@ object SgtinDecoder {
         val error: String = ""
     )
 
-    // Partition table: [companyPrefixBits, companyPrefixDigits, itemRefBits, itemRefDigits]
+    // GS1 SGTIN-96 partition table: cpBits, cpDigits, irBits, irDigits
+    // cpDigits + irDigits = 12 always (for EAN-13 base)
     private val PARTITION_TABLE = mapOf(
         0 to intArrayOf(40, 12, 4,  1),
         1 to intArrayOf(37, 11, 7,  2),
@@ -27,7 +28,7 @@ object SgtinDecoder {
     )
 
     fun decode(epc: String): SgtinResult {
-        return try {
+        try {
             val clean = epc.trim().replace(" ", "").uppercase()
 
             if (clean.length != 24) {
@@ -45,7 +46,8 @@ object SgtinDecoder {
 
             val partition = bin.substring(11, 14).toInt(2)
             val pd = PARTITION_TABLE[partition]
-                ?: return SgtinResult(epc, "", "", "", "", "", false, "Partición inválida: $partition")
+                ?: return SgtinResult(epc, "", "", "", "", "", false,
+                    "Partición inválida: $partition")
 
             val cpBits = pd[0]; val cpDigits = pd[1]
             val irBits = pd[2]; val irDigits = pd[3]
@@ -60,20 +62,16 @@ object SgtinDecoder {
                 .toString().padStart(irDigits, '0')
             val serial = BigInteger(bin.substring(irEnd, 96), 2).toString()
 
-            // GTIN-14: "0" + companyPrefix + itemReference + checkDigit
-            val gtinBase = "0$companyPrefix$itemReference"
-            val checkDigit = gs1Check(gtinBase)
-            val gtin14 = "$gtinBase$checkDigit"
+            // GTIN-13 = companyPrefix(N) + itemReference(M) + checkDigit, where N+M=12
+            val gtinNoCheck = companyPrefix + itemReference
+            val checkDigit = gs1Check(gtinNoCheck)
+            val ean13  = gtinNoCheck + checkDigit.toString()
+            val gtin14 = "0$ean13"
 
-            // EAN-13: drop leading "0"
-            val ean13 = gtin14.substring(1)
-                if (it.length == 13) it else gtin14.takeLast(13)
-            }
-
-            SgtinResult(epc, gtin14, ean13, companyPrefix, itemReference, serial, true)
+            return SgtinResult(epc, gtin14, ean13, companyPrefix, itemReference, serial, true)
 
         } catch (e: Exception) {
-            SgtinResult(epc, "", "", "", "", "", false, "Error: ${e.message}")
+            return SgtinResult(epc, "", "", "", "", "", false, "Error: ${e.message}")
         }
     }
 
@@ -82,6 +80,6 @@ object SgtinDecoder {
         digits.reversed().forEachIndexed { i, c ->
             sum += if (i % 2 == 0) c.digitToInt() * 3 else c.digitToInt()
         }
-        return (10 - (sum % 10)) % 10
+        return (10 - sum % 10) % 10
     }
 }
