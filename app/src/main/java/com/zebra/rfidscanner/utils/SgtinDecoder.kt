@@ -22,8 +22,8 @@ object SgtinDecoder {
         2 to intArrayOf(34, 10, 10, 3),
         3 to intArrayOf(30,  9, 14, 4),
         4 to intArrayOf(27,  8, 17, 5),
-        5 to intArrayOf(24,  7, 20, 6),
-        6 to intArrayOf(20,  6, 24, 7)
+        5 to intArrayOf(24,  7, 20, 5),
+        6 to intArrayOf(20,  6, 24, 6)
     )
 
     fun decode(epc: String): SgtinResult {
@@ -66,7 +66,7 @@ object SgtinDecoder {
             val gtin14 = "$gtinBase$checkDigit"
 
             // EAN-13: drop leading "0"
-            val ean13 = gtin14.trimStart('0').let {
+            val ean13 = gtin14.substring(1)
                 if (it.length == 13) it else gtin14.takeLast(13)
             }
 
