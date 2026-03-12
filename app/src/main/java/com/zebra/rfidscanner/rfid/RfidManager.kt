@@ -160,6 +160,14 @@ class RfidManager @Inject constructor(
 
             reader!!.Actions.PreFilters.deleteAll()
 
+            // Silenciar beep del RFD4030
+            try {
+                val beeperConfig = reader!!.Config.beeperVolume
+                reader!!.Config.beeperVolume = BEEPER_VOLUME.QUIET_BEEP
+            } catch (e: Exception) {
+                Log.w(TAG, "No se pudo configurar beeper: ${e.message}")
+            }
+
             Log.i(TAG, "Reader configurado OK")
         } catch (e: Exception) {
             Log.e(TAG, "configureReader error", e)
