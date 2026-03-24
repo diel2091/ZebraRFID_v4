@@ -1,13 +1,13 @@
 package com.zebra.rfidscanner.ui
-
+ 
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
@@ -18,17 +18,16 @@ import com.zebra.rfidscanner.rfid.RfidManager
 import com.zebra.rfidscanner.utils.CsvExporter
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
-
+ 
 @AndroidEntryPoint
 class ScanActivity : AppCompatActivity() {
-
+ 
     private lateinit var binding: ActivityScanBinding
     private val viewModel: ScanViewModel by viewModels()
     private val adapter = EpcAdapter()
     private var isScanning = false
     private var eanMode = false
-
-    // SAF launcher for choosing export location
+ 
     private var pendingCsvContent: String = ""
     private var pendingCsvName: String = ""
     private val saveLauncher = registerForActivityResult(
@@ -45,14 +44,14 @@ class ScanActivity : AppCompatActivity() {
             }
         }
     }
-
+ 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
         if (perms.values.all { it }) viewModel.initialize()
         else Toast.makeText(this, "Se requieren permisos Bluetooth", Toast.LENGTH_LONG).show()
     }
-
+ 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityScanBinding.inflate(layoutInflater)
@@ -62,7 +61,7 @@ class ScanActivity : AppCompatActivity() {
         observeState()
         checkPermissionsAndInit()
     }
-
+ 
     private fun setupRecyclerView() {
         binding.rvTags.apply {
             layoutManager = LinearLayoutManager(this@ScanActivity)
@@ -70,7 +69,7 @@ class ScanActivity : AppCompatActivity() {
             itemAnimator = null
         }
     }
-
+ 
     private fun setupButtons() {
         binding.btnScan.setOnClickListener {
             isScanning = viewModel.toggleScan()
@@ -80,13 +79,13 @@ class ScanActivity : AppCompatActivity() {
                 else android.graphics.Color.parseColor("#00E5FF")
             )
         }
-
+ 
         binding.btnClear.setOnClickListener {
             viewModel.clearAll()
             isScanning = false
             binding.btnScan.text = "ESCANEAR"
         }
-
+ 
         binding.btnEan.setOnClickListener {
             eanMode = !eanMode
             binding.btnEan.backgroundTintList = android.content.res.ColorStateList.valueOf(
@@ -96,11 +95,28 @@ class ScanActivity : AppCompatActivity() {
             binding.btnEan.text = if (eanMode) "EAN ✓" else "EAN"
             refreshList()
         }
-
+ 
         binding.btnExport.setOnClickListener { showExportOptions() }
         binding.btnRetry.setOnClickListener { viewModel.retry() }
+ 
+        binding.btnRestart.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Reiniciar app")
+                .setMessage("¿Desea reiniciar la aplicación? Esto reconectará el lector RFID.")
+                .setPositiveButton("Reiniciar") { _, _ -> restartApp() }
+                .setNegativeButton("Cancelar", null)
+                .show()
+        }
     }
-
+ 
+    private fun restartApp() {
+        viewModel.release()
+        val intent = packageManager.getLaunchIntentForPackage(packageName)!!
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
+        android.os.Process.killProcess(android.os.Process.myPid())
+    }
+ 
     private fun showExportOptions() {
         val tags = viewModel.getTagsForExport()
         if (tags.isEmpty()) {
@@ -117,7 +133,7 @@ class ScanActivity : AppCompatActivity() {
         }
         saveLauncher.launch(pendingCsvName)
     }
-
+ 
     private fun observeState() {
         lifecycleScope.launch {
             viewModel.connectionState.collect { state ->
@@ -151,7 +167,7 @@ class ScanActivity : AppCompatActivity() {
             viewModel.eanResults.collect { if (eanMode) refreshList() }
         }
     }
-
+ 
     private fun refreshList() {
         val rows = if (eanMode) {
             viewModel.eanResults.value.take(300).map {
@@ -164,7 +180,7 @@ class ScanActivity : AppCompatActivity() {
         }
         adapter.submitList(rows)
     }
-
+ 
     private fun checkPermissionsAndInit() {
         val needed = listOf(
             Manifest.permission.BLUETOOTH_SCAN,
@@ -176,7 +192,7 @@ class ScanActivity : AppCompatActivity() {
         if (needed.isEmpty()) viewModel.initialize()
         else permissionLauncher.launch(needed.toTypedArray())
     }
-
+ 
     override fun onDestroy() {
         super.onDestroy()
         if (isScanning) viewModel.toggleScan()
