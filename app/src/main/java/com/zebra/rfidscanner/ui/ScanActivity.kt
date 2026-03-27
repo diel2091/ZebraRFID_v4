@@ -73,7 +73,7 @@ class ScanActivity : AppCompatActivity() {
     private fun setupButtons() {
         binding.btnScan.setOnClickListener {
             isScanning = viewModel.toggleScan()
-            binding.btnScan.text = if (isScanning) "DETENER" else "ESCANEAR"
+            binding.btnScan.text = if (isScanning) "Detener" else "Escanear"
             binding.btnScan.backgroundTintList = android.content.res.ColorStateList.valueOf(
                 if (isScanning) android.graphics.Color.parseColor("#FF5252")
                 else android.graphics.Color.parseColor("#00E5FF")
@@ -83,7 +83,7 @@ class ScanActivity : AppCompatActivity() {
         binding.btnClear.setOnClickListener {
             viewModel.clearAll()
             isScanning = false
-            binding.btnScan.text = "ESCANEAR"
+            binding.btnScan.text = "Escanear"
         }
  
         binding.btnEan.setOnClickListener {
@@ -198,3 +198,4 @@ class ScanActivity : AppCompatActivity() {
         if (isScanning) viewModel.toggleScan()
     }
 }
+ 
