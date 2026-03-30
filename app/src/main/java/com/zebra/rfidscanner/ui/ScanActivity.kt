@@ -31,6 +31,13 @@ class ScanActivity : AppCompatActivity() {
     private var eanMode = false
     private var searchQuery = ""
  
+    // DataWedge intent action — debe coincidir con lo configurado en DataWedge
+    companion object {
+        const val DW_ACTION     = "com.zebra.rfidscanner.SCAN"
+        const val DW_DATA_KEY   = "com.symbol.datawedge.data_string"
+        const val DW_LABEL_KEY  = "com.symbol.datawedge.label_type"
+    }
+ 
     private var pendingCsvContent: String = ""
     private var pendingCsvName: String = ""
     private val saveLauncher = registerForActivityResult(
@@ -64,6 +71,25 @@ class ScanActivity : AppCompatActivity() {
         setupSearch()
         observeState()
         checkPermissionsAndInit()
+        // Procesar intent inicial por si la app fue abierta desde DataWedge
+        handleDataWedgeIntent(intent)
+    }
+ 
+    // Recibe el barcode cuando la app ya está abierta (singleTop)
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleDataWedgeIntent(intent)
+    }
+ 
+    private fun handleDataWedgeIntent(intent: Intent?) {
+        if (intent == null) return
+        // DataWedge puede enviar via Intent Output o via Keystroke
+        // Aquí capturamos el Intent Output (más confiable)
+        val barcode = intent.getStringExtra(DW_DATA_KEY) ?: return
+        if (barcode.isBlank()) return
+        val clean = barcode.trim()
+        binding.etSearch.setText(clean)
+        binding.etSearch.setSelection(clean.length)
     }
  
     private fun setupRecyclerView() {
@@ -207,8 +233,6 @@ class ScanActivity : AppCompatActivity() {
         }
  
         adapter.submitList(rows)
- 
-        // Mostrar contador de resultados solo cuando hay búsqueda activa
         binding.tvSearchCount.text = if (query.isNotEmpty()) "${rows.size}" else ""
     }
  
