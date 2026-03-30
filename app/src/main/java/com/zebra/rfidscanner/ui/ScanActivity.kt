@@ -4,11 +4,8 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.text.Editable
 import android.text.TextWatcher
-import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -34,10 +31,11 @@ class ScanActivity : AppCompatActivity() {
     private var eanMode = false
     private var searchQuery = ""
  
+    // DataWedge intent action — debe coincidir con lo configurado en DataWedge
     companion object {
-        // DataWedge Intent Output — configurar en DataWedge con este action
-        const val DW_ACTION   = "com.zebra.rfidscanner.SCAN"
-        const val DW_DATA_KEY = "com.symbol.datawedge.data_string"
+        const val DW_ACTION     = "com.zebra.rfidscanner.SCAN"
+        const val DW_DATA_KEY   = "com.symbol.datawedge.data_string"
+        const val DW_LABEL_KEY  = "com.symbol.datawedge.label_type"
     }
  
     private var pendingCsvContent: String = ""
@@ -73,40 +71,25 @@ class ScanActivity : AppCompatActivity() {
         setupSearch()
         observeState()
         checkPermissionsAndInit()
+        // Procesar intent inicial por si la app fue abierta desde DataWedge
         handleDataWedgeIntent(intent)
     }
  
-    // Recibe barcode cuando la app ya está abierta (requiere singleTop en Manifest)
+    // Recibe el barcode cuando la app ya está abierta (singleTop)
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleDataWedgeIntent(intent)
     }
  
     private fun handleDataWedgeIntent(intent: Intent?) {
-        val barcode = intent?.getStringExtra(DW_DATA_KEY) ?: return
+        if (intent == null) return
+        // DataWedge puede enviar via Intent Output o via Keystroke
+        // Aquí capturamos el Intent Output (más confiable)
+        val barcode = intent.getStringExtra(DW_DATA_KEY) ?: return
         if (barcode.isBlank()) return
         val clean = barcode.trim()
         binding.etSearch.setText(clean)
         binding.etSearch.setSelection(clean.length)
-    }
- 
-    // FIX GATILLO FÍSICO: interceptar teclas de hardware antes de que lleguen al EditText
-    // El gatillo del RFD4030 envía KEYCODE_BUTTON_L1 o similar — lo ignoramos aquí
-    // para que el SDK RFID lo maneje directamente via eventStatusNotify
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        val keyCode = event.keyCode
-        // Teclas de scanner/gatillo de Zebra — dejar pasar al SDK, no al EditText
-        if (keyCode == KeyEvent.KEYCODE_BUTTON_L1 ||
-            keyCode == KeyEvent.KEYCODE_BUTTON_R1 ||
-            keyCode == KeyEvent.KEYCODE_F1 ||
-            keyCode == KeyEvent.KEYCODE_F12 ||
-            keyCode == 280 || // KEYCODE_BARCODE_SCAN en algunos Zebra
-            keyCode == 293    // Tecla de scan en TC-series
-        ) {
-            // No consumir — dejar que el SDK RFID lo maneje
-            return false
-        }
-        return super.dispatchKeyEvent(event)
     }
  
     private fun setupRecyclerView() {
@@ -125,8 +108,6 @@ class ScanActivity : AppCompatActivity() {
                 if (isScanning) android.graphics.Color.parseColor("#FF5252")
                 else android.graphics.Color.parseColor("#00E5FF")
             )
-            // Quitar foco del search para que el gatillo físico funcione
-            binding.etSearch.clearFocus()
         }
  
         binding.btnClear.setOnClickListener {
@@ -134,7 +115,6 @@ class ScanActivity : AppCompatActivity() {
             isScanning = false
             binding.btnScan.text = "Escanear"
             binding.etSearch.setText("")
-            binding.etSearch.clearFocus()
         }
  
         binding.btnEan.setOnClickListener {
@@ -160,28 +140,7 @@ class ScanActivity : AppCompatActivity() {
         }
     }
  
-    private fun restartApp() {
-        // Primero lanzar la nueva instancia, luego liberar y matar
-        val intent = packageManager.getLaunchIntentForPackage(packageName)!!
-        intent.addFlags(
-            Intent.FLAG_ACTIVITY_CLEAR_TOP or
-            Intent.FLAG_ACTIVITY_NEW_TASK or
-            Intent.FLAG_ACTIVITY_CLEAR_TASK
-        )
-        startActivity(intent)
-        // Dar tiempo a que el Intent se registre antes de matar el proceso
-        Handler(Looper.getMainLooper()).postDelayed({
-            viewModel.release()
-            android.os.Process.killProcess(android.os.Process.myPid())
-        }, 500)
-    }
- 
     private fun setupSearch() {
-        // Quitar foco automático al iniciar — el gatillo físico RFID necesita que
-        // el EditText NO tenga foco para funcionar correctamente
-        binding.etSearch.clearFocus()
-        binding.rvTags.requestFocus()
- 
         binding.etSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
@@ -190,13 +149,14 @@ class ScanActivity : AppCompatActivity() {
                 refreshList()
             }
         })
+    }
  
-        // Al terminar de escribir en el buscador, quitar foco para liberar el gatillo
-        binding.etSearch.setOnEditorActionListener { _, _, _ ->
-            binding.etSearch.clearFocus()
-            binding.rvTags.requestFocus()
-            true
-        }
+    private fun restartApp() {
+        viewModel.release()
+        val intent = packageManager.getLaunchIntentForPackage(packageName)!!
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
+        android.os.Process.killProcess(android.os.Process.myPid())
     }
  
     private fun showExportOptions() {
@@ -293,3 +253,4 @@ class ScanActivity : AppCompatActivity() {
         if (isScanning) viewModel.toggleScan()
     }
 }
+ 
