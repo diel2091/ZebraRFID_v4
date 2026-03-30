@@ -1,11 +1,13 @@
 package com.zebra.rfidscanner.ui
  
 import android.Manifest
-import android.content.Intent
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.LayoutInflater
+import android.widget.EditText
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -15,11 +17,18 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.zebra.rfidscanner.R
 import com.zebra.rfidscanner.databinding.ActivityScanBinding
 import com.zebra.rfidscanner.rfid.RfidManager
 import com.zebra.rfidscanner.utils.CsvExporter
+import com.zebra.rfidscanner.utils.SmbExporter
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import android.content.Intent
+import android.os.Handler
+import android.os.Looper
  
 @AndroidEntryPoint
 class ScanActivity : AppCompatActivity() {
@@ -31,15 +40,9 @@ class ScanActivity : AppCompatActivity() {
     private var eanMode = false
     private var searchQuery = ""
  
-    // DataWedge intent action — debe coincidir con lo configurado en DataWedge
-    companion object {
-        const val DW_ACTION     = "com.zebra.rfidscanner.SCAN"
-        const val DW_DATA_KEY   = "com.symbol.datawedge.data_string"
-        const val DW_LABEL_KEY  = "com.symbol.datawedge.label_type"
-    }
- 
     private var pendingCsvContent: String = ""
     private var pendingCsvName: String = ""
+ 
     private val saveLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("text/csv")
     ) { uri ->
@@ -71,25 +74,6 @@ class ScanActivity : AppCompatActivity() {
         setupSearch()
         observeState()
         checkPermissionsAndInit()
-        // Procesar intent inicial por si la app fue abierta desde DataWedge
-        handleDataWedgeIntent(intent)
-    }
- 
-    // Recibe el barcode cuando la app ya está abierta (singleTop)
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        handleDataWedgeIntent(intent)
-    }
- 
-    private fun handleDataWedgeIntent(intent: Intent?) {
-        if (intent == null) return
-        // DataWedge puede enviar via Intent Output o via Keystroke
-        // Aquí capturamos el Intent Output (más confiable)
-        val barcode = intent.getStringExtra(DW_DATA_KEY) ?: return
-        if (barcode.isBlank()) return
-        val clean = barcode.trim()
-        binding.etSearch.setText(clean)
-        binding.etSearch.setSelection(clean.length)
     }
  
     private fun setupRecyclerView() {
@@ -108,6 +92,7 @@ class ScanActivity : AppCompatActivity() {
                 if (isScanning) android.graphics.Color.parseColor("#FF5252")
                 else android.graphics.Color.parseColor("#00E5FF")
             )
+            binding.etSearch.clearFocus()
         }
  
         binding.btnClear.setOnClickListener {
@@ -115,6 +100,7 @@ class ScanActivity : AppCompatActivity() {
             isScanning = false
             binding.btnScan.text = "Escanear"
             binding.etSearch.setText("")
+            binding.etSearch.clearFocus()
         }
  
         binding.btnEan.setOnClickListener {
@@ -141,6 +127,9 @@ class ScanActivity : AppCompatActivity() {
     }
  
     private fun setupSearch() {
+        binding.etSearch.clearFocus()
+        binding.rvTags.requestFocus()
+ 
         binding.etSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
@@ -149,15 +138,29 @@ class ScanActivity : AppCompatActivity() {
                 refreshList()
             }
         })
+ 
+        binding.etSearch.setOnEditorActionListener { _, _, _ ->
+            binding.etSearch.clearFocus()
+            binding.rvTags.requestFocus()
+            true
+        }
     }
  
     private fun restartApp() {
-        viewModel.release()
         val intent = packageManager.getLaunchIntentForPackage(packageName)!!
-        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
+        intent.addFlags(
+            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+            Intent.FLAG_ACTIVITY_NEW_TASK or
+            Intent.FLAG_ACTIVITY_CLEAR_TASK
+        )
         startActivity(intent)
-        android.os.Process.killProcess(android.os.Process.myPid())
+        Handler(Looper.getMainLooper()).postDelayed({
+            viewModel.release()
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }, 500)
     }
+ 
+    // ── EXPORT ──────────────────────────────────────────────────────────────
  
     private fun showExportOptions() {
         val tags = viewModel.getTagsForExport()
@@ -165,6 +168,8 @@ class ScanActivity : AppCompatActivity() {
             Toast.makeText(this, "No hay tags para exportar", Toast.LENGTH_SHORT).show()
             return
         }
+ 
+        // Preparar contenido CSV
         val ts = CsvExporter.timestamp()
         if (eanMode) {
             pendingCsvContent = CsvExporter.buildEanCsv(tags)
@@ -173,8 +178,113 @@ class ScanActivity : AppCompatActivity() {
             pendingCsvContent = CsvExporter.buildEpcCsv(tags)
             pendingCsvName = "rfid_epc_$ts.csv"
         }
-        saveLauncher.launch(pendingCsvName)
+ 
+        // Mostrar opciones
+        val options = arrayOf("📁 Guardar en PDT", "🌐 Exportar a carpeta de red")
+        AlertDialog.Builder(this)
+            .setTitle("Exportar CSV")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> saveLauncher.launch(pendingCsvName)
+                    1 -> exportToNetwork()
+                }
+            }
+            .show()
     }
+ 
+    private fun exportToNetwork() {
+        val config = SmbExporter.loadConfig(this)
+        if (config == null) {
+            // Primera vez — pedir configuración
+            showSmbConfigDialog { exportToNetworkWithConfig() }
+        } else {
+            exportToNetworkWithConfig()
+        }
+    }
+ 
+    private fun exportToNetworkWithConfig() {
+        val config = SmbExporter.loadConfig(this) ?: return
+ 
+        // Mostrar progreso
+        val progress = AlertDialog.Builder(this)
+            .setMessage("Subiendo a carpeta de red...")
+            .setCancelable(false)
+            .create()
+        progress.show()
+ 
+        lifecycleScope.launch {
+            val error = withContext(Dispatchers.IO) {
+                SmbExporter.upload(config, pendingCsvName, pendingCsvContent)
+            }
+            progress.dismiss()
+            if (error == null) {
+                Toast.makeText(
+                    this@ScanActivity,
+                    "✓ Exportado a \\\\${config.host}\\${config.share}",
+                    Toast.LENGTH_LONG
+                ).show()
+            } else {
+                AlertDialog.Builder(this@ScanActivity)
+                    .setTitle("Error de red")
+                    .setMessage("No se pudo subir el archivo:\n$error")
+                    .setPositiveButton("Reintentar") { _, _ -> exportToNetworkWithConfig() }
+                    .setNegativeButton("Configurar") { _, _ ->
+                        showSmbConfigDialog { exportToNetworkWithConfig() }
+                    }
+                    .setNeutralButton("Cancelar", null)
+                    .show()
+            }
+        }
+    }
+ 
+    private fun showSmbConfigDialog(onSaved: () -> Unit) {
+        val current = SmbExporter.loadConfig(this)
+ 
+        val dialogView = LayoutInflater.from(this).inflate(
+            android.R.layout.simple_list_item_2, null
+        )
+ 
+        // Diálogo manual con campos
+        val layout = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 8)
+        }
+ 
+        fun field(hint: String, value: String = "", password: Boolean = false) =
+            EditText(this).apply {
+                this.hint = hint
+                setText(value)
+                if (password) inputType =
+                    android.text.InputType.TYPE_CLASS_TEXT or
+                    android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+                layout.addView(this)
+            }
+ 
+        val etHost   = field("IP del servidor (ej: 10.150.1.24)", current?.host ?: "10.150.1.24")
+        val etShare  = field("Carpeta compartida (ej: refId)",    current?.share ?: "refId")
+        val etDomain = field("Dominio (dejar vacío si no aplica)", current?.domain ?: "")
+        val etUser   = field("Usuario de dominio",                 current?.user ?: "")
+        val etPass   = field("Contraseña",                         current?.password ?: "", password = true)
+ 
+        AlertDialog.Builder(this)
+            .setTitle("Configurar carpeta de red")
+            .setView(layout)
+            .setPositiveButton("Guardar") { _, _ ->
+                val config = SmbExporter.SmbConfig(
+                    host     = etHost.text.toString().trim(),
+                    share    = etShare.text.toString().trim(),
+                    domain   = etDomain.text.toString().trim(),
+                    user     = etUser.text.toString().trim(),
+                    password = etPass.text.toString()
+                )
+                SmbExporter.saveConfig(this, config)
+                onSaved()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+ 
+    // ── OBSERVE / LIST ───────────────────────────────────────────────────────
  
     private fun observeState() {
         lifecycleScope.launch {
