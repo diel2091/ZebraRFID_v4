@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -27,6 +29,7 @@ class ScanActivity : AppCompatActivity() {
     private val adapter = EpcAdapter()
     private var isScanning = false
     private var eanMode = false
+    private var searchQuery = ""
  
     private var pendingCsvContent: String = ""
     private var pendingCsvName: String = ""
@@ -58,6 +61,7 @@ class ScanActivity : AppCompatActivity() {
         setContentView(binding.root)
         setupRecyclerView()
         setupButtons()
+        setupSearch()
         observeState()
         checkPermissionsAndInit()
     }
@@ -84,6 +88,7 @@ class ScanActivity : AppCompatActivity() {
             viewModel.clearAll()
             isScanning = false
             binding.btnScan.text = "Escanear"
+            binding.etSearch.setText("")
         }
  
         binding.btnEan.setOnClickListener {
@@ -107,6 +112,17 @@ class ScanActivity : AppCompatActivity() {
                 .setNegativeButton("Cancelar", null)
                 .show()
         }
+    }
+ 
+    private fun setupSearch() {
+        binding.etSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                searchQuery = s?.toString()?.trim() ?: ""
+                refreshList()
+            }
+        })
     }
  
     private fun restartApp() {
@@ -169,16 +185,31 @@ class ScanActivity : AppCompatActivity() {
     }
  
     private fun refreshList() {
+        val query = searchQuery.uppercase()
+ 
         val rows = if (eanMode) {
-            viewModel.eanResults.value.take(300).map {
-                EpcAdapter.Row.EanRow(it, 1)
-            }
+            viewModel.eanResults.value
+                .filter { r ->
+                    query.isEmpty() ||
+                    r.epc.contains(query, ignoreCase = true) ||
+                    r.ean13.contains(query, ignoreCase = true) ||
+                    r.gtin14.contains(query, ignoreCase = true)
+                }
+                .take(300)
+                .map { EpcAdapter.Row.EanRow(it, 1) }
         } else {
-            viewModel.tags.value.take(300).map {
-                EpcAdapter.Row.EpcRow(it.epc, it.readCount)
-            }
+            viewModel.tags.value
+                .filter { t ->
+                    query.isEmpty() || t.epc.contains(query, ignoreCase = true)
+                }
+                .take(300)
+                .map { EpcAdapter.Row.EpcRow(it.epc, it.readCount) }
         }
+ 
         adapter.submitList(rows)
+ 
+        // Mostrar contador de resultados solo cuando hay búsqueda activa
+        binding.tvSearchCount.text = if (query.isNotEmpty()) "${rows.size}" else ""
     }
  
     private fun checkPermissionsAndInit() {
