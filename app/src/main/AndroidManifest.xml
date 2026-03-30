@@ -33,7 +33,7 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- DataWedge intent output -->
+            <!-- DataWedge Intent Output -->
             <intent-filter>
                 <action android:name="com.zebra.rfidscanner.SCAN" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -43,3 +43,4 @@
     </application>
  
 </manifest>
+ 
