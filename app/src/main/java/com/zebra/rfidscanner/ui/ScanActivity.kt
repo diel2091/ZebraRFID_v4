@@ -201,22 +201,15 @@ class ScanActivity : AppCompatActivity() {
         }
     }
  
-    // FIX PROBLEMA 1: Reinicio correcto
-    // Primero libera, espera, luego lanza nueva instancia y mata el proceso
+    // FIX REINICIO para Enterprise Home Screen (EHS)
+    // EHS no permite killProcess — en su lugar se usa recreate() para reiniciar la Activity
+    // y se reconecta el lector RFID limpiamente
     private fun restartApp() {
         viewModel.release()
         Handler(Looper.getMainLooper()).postDelayed({
-            val intent = packageManager.getLaunchIntentForPackage(packageName)!!
-            intent.addFlags(
-                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_CLEAR_TASK
-            )
-            startActivity(intent)
-            Handler(Looper.getMainLooper()).postDelayed({
-                android.os.Process.killProcess(android.os.Process.myPid())
-            }, 300)
-        }, 600)
+            viewModel.initialize()
+            recreate()
+        }, 800)
     }
  
     // ── EXPORT ──────────────────────────────────────────────────────────────
