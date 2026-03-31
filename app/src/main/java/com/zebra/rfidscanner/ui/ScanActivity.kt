@@ -1,9 +1,14 @@
 package com.zebra.rfidscanner.ui
  
 import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.LayoutInflater
@@ -17,7 +22,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
-import com.zebra.rfidscanner.R
 import com.zebra.rfidscanner.databinding.ActivityScanBinding
 import com.zebra.rfidscanner.rfid.RfidManager
 import com.zebra.rfidscanner.utils.CsvExporter
@@ -26,9 +30,6 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import android.content.Intent
-import android.os.Handler
-import android.os.Looper
  
 @AndroidEntryPoint
 class ScanActivity : AppCompatActivity() {
@@ -42,6 +43,20 @@ class ScanActivity : AppCompatActivity() {
  
     private var pendingCsvContent: String = ""
     private var pendingCsvName: String = ""
+ 
+    // FIX PROBLEMA 2: Receptor para saber cuando la pantalla se enciende/apaga
+    // Cuando la pantalla se enciende, DataWedge necesita que la Activity tome foco
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_SCREEN_ON) {
+                // Re-registrar DataWedge cuando la pantalla vuelve
+                Handler(Looper.getMainLooper()).postDelayed({
+                    binding.rvTags.requestFocus()
+                    notifyDataWedge()
+                }, 300)
+            }
+        }
+    }
  
     private val saveLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("text/csv")
@@ -74,6 +89,43 @@ class ScanActivity : AppCompatActivity() {
         setupSearch()
         observeState()
         checkPermissionsAndInit()
+ 
+        // Registrar receptor de pantalla
+        registerReceiver(screenReceiver, IntentFilter(Intent.ACTION_SCREEN_ON))
+    }
+ 
+    override fun onResume() {
+        super.onResume()
+        // FIX PROBLEMA 2: Notificar a DataWedge cada vez que la Activity vuelve al frente
+        // Esto resuelve el retraso de 3-5 min al abrir la app
+        Handler(Looper.getMainLooper()).postDelayed({
+            notifyDataWedge()
+        }, 500)
+    }
+ 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            // La Activity tiene foco — activar DataWedge
+            notifyDataWedge()
+            binding.rvTags.requestFocus()
+        }
+    }
+ 
+    // Envía un Intent a DataWedge para activar el perfil de esta app
+    private fun notifyDataWedge() {
+        try {
+            val dwIntent = Intent()
+            dwIntent.action = "com.symbol.datawedge.api.ACTION"
+            dwIntent.putExtra("com.symbol.datawedge.api.RESUME_PLUGIN", "")
+            sendBroadcast(dwIntent)
+        } catch (_: Exception) {}
+    }
+ 
+    override fun onDestroy() {
+        super.onDestroy()
+        try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
+        if (isScanning) viewModel.toggleScan()
     }
  
     private fun setupRecyclerView() {
@@ -93,6 +145,7 @@ class ScanActivity : AppCompatActivity() {
                 else android.graphics.Color.parseColor("#00E5FF")
             )
             binding.etSearch.clearFocus()
+            binding.rvTags.requestFocus()
         }
  
         binding.btnClear.setOnClickListener {
@@ -101,6 +154,7 @@ class ScanActivity : AppCompatActivity() {
             binding.btnScan.text = "Escanear"
             binding.etSearch.setText("")
             binding.etSearch.clearFocus()
+            binding.rvTags.requestFocus()
         }
  
         binding.btnEan.setOnClickListener {
@@ -142,22 +196,27 @@ class ScanActivity : AppCompatActivity() {
         binding.etSearch.setOnEditorActionListener { _, _, _ ->
             binding.etSearch.clearFocus()
             binding.rvTags.requestFocus()
+            notifyDataWedge()
             true
         }
     }
  
+    // FIX PROBLEMA 1: Reinicio correcto
+    // Primero libera, espera, luego lanza nueva instancia y mata el proceso
     private fun restartApp() {
-        val intent = packageManager.getLaunchIntentForPackage(packageName)!!
-        intent.addFlags(
-            Intent.FLAG_ACTIVITY_CLEAR_TOP or
-            Intent.FLAG_ACTIVITY_NEW_TASK or
-            Intent.FLAG_ACTIVITY_CLEAR_TASK
-        )
-        startActivity(intent)
+        viewModel.release()
         Handler(Looper.getMainLooper()).postDelayed({
-            viewModel.release()
-            android.os.Process.killProcess(android.os.Process.myPid())
-        }, 500)
+            val intent = packageManager.getLaunchIntentForPackage(packageName)!!
+            intent.addFlags(
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TASK
+            )
+            startActivity(intent)
+            Handler(Looper.getMainLooper()).postDelayed({
+                android.os.Process.killProcess(android.os.Process.myPid())
+            }, 300)
+        }, 600)
     }
  
     // ── EXPORT ──────────────────────────────────────────────────────────────
@@ -169,7 +228,6 @@ class ScanActivity : AppCompatActivity() {
             return
         }
  
-        // Preparar contenido CSV
         val ts = CsvExporter.timestamp()
         if (eanMode) {
             pendingCsvContent = CsvExporter.buildEanCsv(tags)
@@ -179,7 +237,6 @@ class ScanActivity : AppCompatActivity() {
             pendingCsvName = "rfid_epc_$ts.csv"
         }
  
-        // Mostrar opciones
         val options = arrayOf("📁 Guardar en PDT", "🌐 Exportar a carpeta de red")
         AlertDialog.Builder(this)
             .setTitle("Exportar CSV")
@@ -195,7 +252,6 @@ class ScanActivity : AppCompatActivity() {
     private fun exportToNetwork() {
         val config = SmbExporter.loadConfig(this)
         if (config == null) {
-            // Primera vez — pedir configuración
             showSmbConfigDialog { exportToNetworkWithConfig() }
         } else {
             exportToNetworkWithConfig()
@@ -205,7 +261,6 @@ class ScanActivity : AppCompatActivity() {
     private fun exportToNetworkWithConfig() {
         val config = SmbExporter.loadConfig(this) ?: return
  
-        // Mostrar progreso
         val progress = AlertDialog.Builder(this)
             .setMessage("Subiendo a carpeta de red...")
             .setCancelable(false)
@@ -240,11 +295,6 @@ class ScanActivity : AppCompatActivity() {
     private fun showSmbConfigDialog(onSaved: () -> Unit) {
         val current = SmbExporter.loadConfig(this)
  
-        val dialogView = LayoutInflater.from(this).inflate(
-            android.R.layout.simple_list_item_2, null
-        )
- 
-        // Diálogo manual con campos
         val layout = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             setPadding(48, 24, 48, 8)
@@ -262,7 +312,7 @@ class ScanActivity : AppCompatActivity() {
  
         val etHost   = field("IP del servidor (ej: 10.150.1.24)", current?.host ?: "10.150.1.24")
         val etShare  = field("Carpeta compartida (ej: refId)",    current?.share ?: "refId")
-        val etDomain = field("Dominio (dejar vacío si no aplica)", current?.domain ?: "")
+        val etDomain = field("Dominio",                            current?.domain ?: "newwearcorp")
         val etUser   = field("Usuario de dominio",                 current?.user ?: "")
         val etPass   = field("Contraseña",                         current?.password ?: "", password = true)
  
@@ -357,10 +407,4 @@ class ScanActivity : AppCompatActivity() {
         if (needed.isEmpty()) viewModel.initialize()
         else permissionLauncher.launch(needed.toTypedArray())
     }
- 
-    override fun onDestroy() {
-        super.onDestroy()
-        if (isScanning) viewModel.toggleScan()
-    }
 }
- 
